@@ -1,0 +1,300 @@
+<html>
+<head>
+<meta charset=utf-8 />
+<title>Your nearest Flood Control Project</title>
+<meta name='viewport' content='initial-scale=1,maximum-scale=1,user-scalable=no' />
+<script src='https://api.tiles.mapbox.com/mapbox.js/plugins/turf/v1.3.0/turf.min.js'></script>
+<script src='https://api.mapbox.com/mapbox.js/v3.3.1/mapbox.js'></script>
+<link href='https://api.mapbox.com/mapbox.js/v3.3.1/mapbox.css' rel='stylesheet' />
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/2.1.3/jquery.min.js"></script>
+<link href='https://www.mapbox.com/base/latest/base.css' rel='stylesheet' />
+<style>
+  body { margin:0; padding:0; }
+  path {pointer-events:none}
+
+  #map { position:absolute; top:51; bottom:0; width:100%; }
+  .leaflet-popup-content .marker-title{font-weight:400;color:#999;line-height:1.3em;}
+  .marker-title span{color:#00704A;font-weight:bold;}
+  #findme{display:none;background:#00704A}
+  #milecount {line-height:2em;color:#00704A}
+  #searchresults {height:0px; overflow:visible; display:none;}
+  input:focus + #searchresults, #searchresults:active {display:block;}
+  .result{background:white; width:160px; display:block; padding:10px; cursor:pointer;line-height:1.4em;}
+  .result:hover {color:#00704A;}
+  .leaflet-container {cursor:default;}
+  .leaflet-marker-icon{cursor:default;}
+  .leaflet-popup-content {padding: 10px;}
+  .leaflet-marker-icon:active ~ * {pointer-events:none;}
+  .leaflet-marker-draggable:hover{cursor:-webkit-grab;}
+  .leaflet-marker-draggable:active{cursor:-webkit-grabbing;}
+  .blocker {color:#00704A; text-align: center}
+  path[stroke-opacity='1'] {stroke-dashoffset: 10000; stroke-dasharray:10000; -webkit-transition:stroke-dashoffset 6s}
+  strong {color:#666;}
+  .distance-icon {border-radius:10px; background:#fff;color:#00704A; text-align:center;display:inline-block; border:2px solid #00704A;}
+</style>
+</head>
+<body>
+<div id='map'></div>
+<div class='pin-top fill-white pad1 keyline-bottom quiet space'>
+    <div class='blocker strong large pad0'>
+            Downloading locations...
+    </div>
+    <div id='topbar' style='display:none'>
+        <img src='logo.svg' style='width:30px;margin-right:10px'>
+        <span id='milecount' class='strong'>0</span> flood control projects within <span id='distance'>a kilometer</span> from here
+        <span class='button short fr icon satellite' id='findme'>Find me</span>
+        <fieldset class="fr with-icon inline">
+            <span class="icon search" style='top:5px; left:5px'></span>
+            <input type="text" placeholder='Search' class="round short" autocomplete="off" style='width:160px;margin-right:10px'>
+            <div id='searchresults'>
+            </div>
+        </fieldset>
+    </div>
+</div>
+
+<script>
+L.mapbox.accessToken = 'pk.eyJ1IjoicnVra3UiLCJhIjoiZEJocE9tSSJ9.tWSIxlu5AHgccim4JMuWLQ';
+
+var map = L.mapbox.map('map')
+    .setView([14.647923721414365,121.06113374233246], 16)
+    .addLayer(L.mapbox.styleLayer('mapbox://styles/mapbox/light-v10'));
+
+
+new L.Control.Zoom({ position: 'bottomleft' }).addTo(map);
+
+var marker = L.marker(new L.LatLng(14.647923721414365,121.06113374233246), {
+    icon: L.mapbox.marker.icon({
+        "marker-color": "#00704A",
+        "title": "Flood control projects",
+        "marker-symbol": "pitch",
+        "marker-size": "large"
+    }),
+    draggable: true,
+    zIndexOffset:999
+});
+
+var currentPosition;
+var currentRadius =1;
+
+//Geocoder lookup
+var geocoder = L.mapbox.geocoder('mapbox.places-v6');
+
+
+//geolocation
+function getLocation() {
+    if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(showPosition);
+    }
+}
+
+function showPosition(position) {
+    $('#findme').show();
+    currentPosition=[position.coords.latitude, position.coords.longitude];
+}
+
+function pointBuffer (pt, radius, units, resolution) {
+  var ring = []
+  var resMultiple = 360/resolution;
+  for(var i  = 0; i < resolution; i++) {
+    var spoke = turf.destination(pt, radius, i*resMultiple, units);
+    ring.push(spoke.geometry.coordinates);
+  }
+  if((ring[0][0] !== ring[ring.length-1][0]) && (ring[0][1] != ring[ring.length-1][1])) {
+    ring.push([ring[0][0], ring[0][1]]);
+  }
+  return turf.polygon([ring])
+}
+
+$.get('flood_control_data-all.geojson', function(data){
+    $('.blocker').remove();
+    $('#topbar').show();
+
+    var fc = (data);
+    var fc = JSON.parse(data);
+
+    //find me functionality
+    $('#findme').on('click', function(){
+        marker.setLatLng(currentPosition);
+        map.setView(currentPosition, 16);
+        updateVenues();
+    });
+
+    //click-move functionality
+    map.on('click',function(e){
+        marker.setLatLng([e.latlng.lat, e.latlng.lng]);
+        map.setView([e.latlng.lat, e.latlng.lng],14);
+        updateVenues();
+    });
+
+    //input search functionality
+    $('fieldset input').keyup(function(event) {
+        var contents=$('fieldset input').val();
+        var url='https://api.tiles.mapbox.com/v4/geocode/mapbox.places/'+contents+'.json?access_token='+L.mapbox.accessToken;
+
+        $.get(url, function(data){
+            $('.result').remove();
+            data.features.forEach(function(result){
+                var place = result['name'];
+                var reg = new RegExp(contents,"gi");
+                place = place.replace(reg, function (match) {return "<strong>" + match + "</strong>"});
+                $('#searchresults')
+                    .append('<div class="result keyline-bottom keyline-left keyline-right small">'+place+'</div>')
+            });
+            $('.result').each(function(index){
+                var coords= (data.features[index]['center']);
+                $(this).on('click', function(){
+                    map.setView([coords[1], coords[0]], 13);
+                    marker.setLatLng([coords[1], coords[0]]);
+                    updateVenues();
+                })
+            })
+        })
+
+        if (event.keyCode == 13) {
+            geocoder.query(contents, showMap);
+            $('input').blur();
+        }
+    });
+
+    function showMap(err, data) {
+        map.setView([data.latlng[0], data.latlng[1]], 13);
+        marker.setLatLng([data.latlng[0], data.latlng[1]]);
+        updateVenues();
+    }
+
+    //mousewheel functionality (adjust radius)
+
+    $('.leaflet-marker-draggable').on('mousewheel',function(event){
+        var wheelDelta= event.originalEvent.wheelDeltaY;
+        if (currentRadius-wheelDelta*0.001>=0.5 && currentRadius-wheelDelta*0.001<=2){
+            currentRadius=currentRadius-wheelDelta*0.001;
+            updateVenues();
+            var distancePhrase;
+            switch (parseFloat(currentRadius.toFixed(2))) {
+                case 0.50:
+                    distancePhrase = 'a half kilometer'
+                    break;
+                case 1.00:
+                    distancePhrase = 'a kilometer'
+                    break;
+                case 2.00:
+                    distancePhrase = 'two kilometers'
+                    break;
+                default:
+                    distancePhrase = currentRadius.toFixed(2)+' kilometers'
+                    break;
+            }
+            $('#distance').html(distancePhrase);
+        }
+
+        event.stopPropagation();
+        return false;
+    });
+
+    // get position, get radius, draw buffer, find within, calculate distances, find nearest, add to map
+    function updateVenues(){
+        $('path').remove();
+        $('.leaflet-marker-pane *').not(':first').remove();
+        var position=marker.getLatLng();
+        var point=turf.point(position.lng, position.lat);
+
+        //draw buffer
+        var bufferLayer = L.mapbox.featureLayer().addTo(map);
+            var buffer = pointBuffer(point, currentRadius, 'kilometers', 120);
+            buffer.properties = {
+                "fill": "#00704A",
+                "fill-opacity":0.05,
+                "stroke": "#00704A",
+                "stroke-width": 2,
+                "stroke-opacity": 0.5
+            };
+
+        bufferLayer.setGeoJSON(buffer);
+
+        var within = turf.featurecollection(fc.features.filter(function(shop){
+            if (turf.distance(shop, point, 'kilometers') <= currentRadius) return true;
+        }));
+        $('#milecount').html(within.features.length);
+        function mileConvert(miles){
+            if (miles<=1.00){
+                return (miles*1000).toFixed(0)+' meters'
+            } else {
+                return miles.toFixed(2) +' kilometers'
+            }
+        }
+
+        function checkPhone(phone){
+            if(phone!==null && phone!=='null'){
+                return '<br>☎ '+phone
+            } else {
+                return ''}
+        }
+        within.features.forEach(function(feature){
+            var distance = parseFloat(turf.distance(point, feature, 'kilometers'));
+            feature.properties["marker-color"] = "#6E6E6E";
+            feature.properties["title"] = '<span>'+mileConvert(distance)+'</span><br>'+'<strong>'+feature.properties["ProjectDescription"]+'</strong>'+'<br>'+feature.properties["ProjectComponentDescription"]+'<br>'+feature.properties["Contractor"]+'<br>'+feature.properties["ImplementingOffice"]+'<br><strong>Click for walking route</strong>';
+            feature.properties["marker-size"] = "small";
+            feature.properties["marker-symbol"] = "water";
+        })
+
+        var nearest = turf.nearest(point, fc);
+        var nearestdist = parseFloat(turf.distance(point, nearest, 'kilometers'));
+
+            nearest.properties["marker-color"] = "#00704A";
+            nearest.properties["title"] = '<span>'+mileConvert(nearestdist)+' (nearest)</span><br>'+'<strong>'+nearest.properties["ProjectDescription"]+'</strong>'+'<br>'+nearest.properties["ProjectComponentDescription"]+'<br>'+nearest.properties["Contractor"]+'<br>'+nearest.properties["ImplementingOffice"]+ '<br><strong>Click for walking route</strong>';
+            nearest.properties["marker-size"] = "medium";
+            nearest.properties["marker-symbol"] = "water";
+
+        var nearest_fc = L.mapbox.featureLayer().setGeoJSON(turf.featurecollection([within, nearest])).addTo(map);
+
+        // hover tooltips and click to zoom/route functionality
+        nearest_fc
+        .on('mouseover', function(e) {
+            e.layer.openPopup();
+        })
+        .on('mouseout', function(e) {
+            e.layer.closePopup();
+        })
+        .on('click', function(e){
+
+            // assemble directions URL based on position of user and selected cafe
+            var startEnd= position.lng+','+position.lat+';'+e.latlng.lng+','+e.latlng.lat;
+            //var directionsAPI = 'https://api.tiles.mapbox.com/v4/directions/mapbox.walking/'+startEnd+'.json?access_token='+L.mapbox.accessToken;
+            var directionsAPI = 'https://api.mapbox.com/directions/v5/mapbox/walking/'+startEnd+'?steps=true&geometries=geojson&access_token='+L.mapbox.accessToken;
+            // query for directions and draw the path
+            $.get(directionsAPI, function(data){
+                var coords= data.routes[0].geometry.coordinates;
+                coords.unshift([position.lng, position.lat]);
+                coords.push([e.latlng.lng, e.latlng.lat]);
+                var path = turf.linestring(coords, {
+                    "stroke": "#00704A",
+                    "stroke-width": 4,
+                    "opacity":1
+                });
+
+                $('.distance-icon').remove();
+                map.fitBounds(map.featureLayer.setGeoJSON(path).getBounds());
+                window.setTimeout(function(){$('path').css('stroke-dashoffset',0)},400);
+                var duration= parseInt((data.routes[0].duration)/60);
+                if (duration<100){
+                    L.marker([coords[parseInt(coords.length*0.5)][1],coords[parseInt(coords.length*0.5)][0]],{
+                        icon: L.divIcon({
+                            className: 'distance-icon',
+                            html: '<strong style="color:#00704A">'+duration+'</strong> <span class="micro">min</span>',
+                            iconSize: [45, 23]
+                        })})
+                    .addTo(map);
+                }
+            })
+        });
+    }
+    marker.on('drag', function(){updateVenues()});
+    updateVenues();
+});
+
+getLocation();
+marker.addTo(map);
+
+</script>
+</body>
+</html>
