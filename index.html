@@ -17,10 +17,12 @@
   .marker-title span{color:#00704A;font-weight:bold;}
   #findme{display:none;background:#00704A}
   #milecount {line-height:2em;color:#00704A}
-  #searchresults {height:0px; overflow:visible; display:none;}
-  input:focus + #searchresults, #searchresults:active {display:block;}
-  .result{background:white; width:160px; display:block; padding:10px; cursor:pointer;line-height:1.4em;}
-  .result:hover {color:#00704A;}
+  #searchresults {position:absolute; top:48px; left:10px; right:10px; background:white; border-radius:3px; box-shadow:0 2px 8px rgba(0,0,0,0.2); max-height:300px; overflow-y:auto; display:none; z-index:10;}
+  #search-box input:focus ~ #searchresults {display:block;}
+  #searchresults:hover {display:block;}
+  .result{background:white; width:100%; display:block; padding:10px; cursor:pointer;line-height:1.4em; border-bottom:1px solid #eee;}
+  .result:last-child {border-bottom:none;}
+  .result:hover {background:#f5f5f5; color:#00704A;}
   .leaflet-container {cursor:default;}
   .leaflet-marker-icon{cursor:default;}
   .leaflet-popup-content {padding: 10px;}
@@ -31,23 +33,49 @@
   path[stroke-opacity='1'] {stroke-dashoffset: 10000; stroke-dasharray:10000; -webkit-transition:stroke-dashoffset 6s}
   strong {color:#666;}
   .distance-icon {border-radius:10px; background:#fff;color:#00704A; text-align:center;display:inline-block; border:2px solid #00704A;}
+  #transport-mode {position:absolute; top:10px; left:10px; z-index:1000; background:white; padding:10px; border-radius:5px; box-shadow:0 1px 5px rgba(0,0,0,0.4);}
+  .mode-btn {background:#fff; border:2px solid #00704A; color:#00704A; padding:8px 12px; cursor:pointer; border-radius:3px; margin:3px; font-size:13px; display:block; text-align:left;}
+  .mode-btn.active {background:#00704A; color:#fff;}
+  .mode-btn:hover {background:#00704A; color:#fff;}
+  #search-box {position:absolute; top:10px; right:10px; z-index:1000; background:white; padding:10px; border-radius:5px; box-shadow:0 1px 5px rgba(0,0,0,0.4);}
+  #search-box input {border:2px solid #00704A; padding:8px 8px 8px 35px; border-radius:3px; width:220px; font-size:13px; outline:none;}
+  #search-box input:focus {border-color:#005a3c;}
+  #search-box .icon {position:absolute; left:18px; top:18px; color:#00704A; z-index:1;}
+  #project-info {position:absolute; top:10px; left:50%; transform:translateX(-50%); z-index:1000; background:white; padding:10px 15px; border-radius:5px; box-shadow:0 1px 5px rgba(0,0,0,0.4); font-size:13px; line-height:1.5em; text-align:center; white-space:nowrap;}
+  #findme-btn {position:absolute; top:70px; right:10px; z-index:1000; background:#00704A; color:white; padding:10px 15px; border-radius:5px; box-shadow:0 1px 5px rgba(0,0,0,0.4); cursor:pointer; font-size:13px;}
+  #findme-btn:hover {background:#005a3c;}
 </style>
 </head>
 <body>
 <div id='map'></div>
-<div class='pin-top fill-white pad1 keyline-bottom quiet space'>
+
+<!-- Project Info Overlay -->
+<div id='project-info' style='display:none'>
+    <span id='milecount' class='strong' style='color:#00704A; font-size:18px;'>0</span> flood control projects<br>
+    within <span id='distance' style='color:#00704A; font-weight:bold;'>a kilometer</span> from here
+</div>
+
+<!-- Transport Mode Overlay -->
+<div id='transport-mode'>
+    <div class='mode-btn active' data-mode='walking'>🚶 Walking</div>
+    <div class='mode-btn' data-mode='cycling'>🚴 Biking</div>
+</div>
+
+<!-- Search Box Overlay -->
+<div id='search-box'>
+    <span class="icon" style='pointer-events:none;'>🔍</span>
+    <input type="text" placeholder='Search location...' autocomplete="on">
+    <div id='searchresults'></div>
+</div>
+
+<!-- Find Me Button -->
+<div id='findme-btn' style='display:none'>
+    📍 Find me
+</div>
+
+<div class='pin-top fill-white pad1 keyline-bottom quiet space' style='display:none;'>
     <div class='blocker strong large pad0'>
             Downloading locations...
-    </div>
-    <div id='topbar' style='display:none'>
-        <span id='milecount' class='strong'>0</span> flood control projects within <span id='distance'>a kilometer</span> from here
-        <span class='button short fr icon satellite' id='findme'>Find me</span>
-        <fieldset class="fr with-icon inline">
-            <span class="icon search" style='top:5px; left:5px'></span>
-            <input type="text" placeholder='Search' class="round short" autocomplete="off" style='width:160px;margin-right:10px'>
-            <div id='searchresults'>
-            </div>
-        </fieldset>
     </div>
 </div>
 
@@ -74,6 +102,8 @@ var marker = L.marker(new L.LatLng(14.647923721414365,121.06113374233246), {
 
 var currentPosition;
 var currentRadius =1;
+var currentTransportMode = 'walking'; // default mode
+var fc; // global flood control data
 
 //Geocoder lookup
 var geocoder = L.mapbox.geocoder('mapbox.places-v6');
@@ -87,7 +117,7 @@ function getLocation() {
 }
 
 function showPosition(position) {
-    $('#findme').show();
+    $('#findme-btn').show();
     currentPosition=[position.coords.latitude, position.coords.longitude];
 }
 
@@ -106,13 +136,24 @@ function pointBuffer (pt, radius, units, resolution) {
 
 $.get('flood_control_data-all.geojson', function(data){
     $('.blocker').remove();
-    $('#topbar').show();
+    $('#project-info').show();
 
-    var fc = (data);
-//    var fc = JSON.parse(data);
+    // Parse and assign to global variable
+    if (typeof data === 'string') {
+        fc = JSON.parse(data);
+    } else {
+        fc = data;
+    }
+
+    //transportation mode selector
+    $('.mode-btn').on('click', function(){
+        $('.mode-btn').removeClass('active');
+        $(this).addClass('active');
+        currentTransportMode = $(this).data('mode');
+    });
 
     //find me functionality
-    $('#findme').on('click', function(){
+    $('#findme-btn').on('click', function(){
         marker.setLatLng(currentPosition);
         map.setView(currentPosition, 16);
         updateVenues();
@@ -126,32 +167,62 @@ $.get('flood_control_data-all.geojson', function(data){
     });
 
     //input search functionality
-    $('fieldset input').keyup(function(event) {
-        var contents=$('fieldset input').val();
+    $('#search-box input').on('keyup', function(event) {
+        var contents=$('#search-box input').val();
+        console.log('Search input:', contents);
+        
+        if(contents.length < 2) {
+            $('#searchresults').hide();
+            $('.result').remove();
+            return;
+        }
+        
         var url='https://api.tiles.mapbox.com/v4/geocode/mapbox.places/'+contents+'.json?access_token='+L.mapbox.accessToken;
+        console.log('Search URL:', url);
 
         $.get(url, function(data){
+            console.log('Search results:', data);
             $('.result').remove();
-            data.features.forEach(function(result){
-                var place = result['name'];
-                var reg = new RegExp(contents,"gi");
-                place = place.replace(reg, function (match) {return "<strong>" + match + "</strong>"});
-                $('#searchresults')
-                    .append('<div class="result keyline-bottom keyline-left keyline-right small">'+place+'</div>')
-            });
-            $('.result').each(function(index){
-                var coords= (data.features[index]['center']);
-                $(this).on('click', function(){
-                    map.setView([coords[1], coords[0]], 13);
-                    marker.setLatLng([coords[1], coords[0]]);
-                    updateVenues();
+            if(data.features && data.features.length > 0) {
+                console.log('Found', data.features.length, 'results');
+                $('#searchresults').show();
+                data.features.forEach(function(result){
+                    // Use place_name if name is not available
+                    var place = result['place_name'] || result['name'] || 'Unknown location';
+                    console.log('Place:', place);
+                    var reg = new RegExp(contents,"gi");
+                    place = place.replace(reg, function (match) {return "<strong>" + match + "</strong>"});
+                    $('#searchresults')
+                        .append('<div class="result">'+place+'</div>')
+                });
+                $('.result').each(function(index){
+                    var coords= (data.features[index]['center']);
+                    $(this).on('click', function(){
+                        map.setView([coords[1], coords[0]], 13);
+                        marker.setLatLng([coords[1], coords[0]]);
+                        updateVenues();
+                        $('#search-box input').val('');
+                        $('#searchresults').hide();
+                    })
                 })
-            })
-        })
+            } else {
+                console.log('No results found');
+            }
+        }).fail(function(error) {
+            console.error('Search API error:', error);
+        });
 
         if (event.keyCode == 13) {
             geocoder.query(contents, showMap);
-            $('input').blur();
+            $('#search-box input').blur();
+            $('#searchresults').hide();
+        }
+    });
+    
+    // Hide search results when clicking outside
+    $(document).on('click', function(e) {
+        if (!$(e.target).closest('#search-box').length) {
+            $('#searchresults').hide();
         }
     });
 
@@ -231,7 +302,7 @@ $.get('flood_control_data-all.geojson', function(data){
         within.features.forEach(function(feature){
             var distance = parseFloat(turf.distance(point, feature, 'kilometers'));
             feature.properties["marker-color"] = "#6E6E6E";
-            feature.properties["title"] = '<span>'+mileConvert(distance)+'</span><br>'+'<strong>'+feature.properties["ProjectDescription"]+'</strong>'+'<br>'+feature.properties["ProjectComponentDescription"]+'<br>'+feature.properties["Contractor"]+'<br>'+feature.properties["ImplementingOffice"]+'<br><strong>Click for walking route</strong>';
+            feature.properties["title"] = '<span>'+mileConvert(distance)+'</span><br>'+'<strong>'+feature.properties["ProjectDescription"]+'</strong>'+'<br>'+feature.properties["ProjectComponentDescription"]+'<br>'+feature.properties["Contractor"]+'<br>'+feature.properties["ImplementingOffice"]+'<br><strong>Click for directions</strong>';
             feature.properties["marker-size"] = "small";
             feature.properties["marker-symbol"] = "water";
         })
@@ -240,7 +311,7 @@ $.get('flood_control_data-all.geojson', function(data){
         var nearestdist = parseFloat(turf.distance(point, nearest, 'kilometers'));
 
             nearest.properties["marker-color"] = "#00704A";
-            nearest.properties["title"] = '<span>'+mileConvert(nearestdist)+' (nearest)</span><br>'+'<strong>'+nearest.properties["ProjectDescription"]+'</strong>'+'<br>'+nearest.properties["ProjectComponentDescription"]+'<br>'+nearest.properties["Contractor"]+'<br>'+nearest.properties["ImplementingOffice"]+ '<br><strong>Click for walking route</strong>';
+            nearest.properties["title"] = '<span>'+mileConvert(nearestdist)+' (nearest)</span><br>'+'<strong>'+nearest.properties["ProjectDescription"]+'</strong>'+'<br>'+nearest.properties["ProjectComponentDescription"]+'<br>'+nearest.properties["Contractor"]+'<br>'+nearest.properties["ImplementingOffice"]+ '<br><strong>Click for directions</strong>';
             nearest.properties["marker-size"] = "medium";
             nearest.properties["marker-symbol"] = "water";
 
@@ -259,9 +330,17 @@ $.get('flood_control_data-all.geojson', function(data){
             // assemble directions URL based on position of user and selected cafe
             var startEnd= position.lng+','+position.lat+';'+e.latlng.lng+','+e.latlng.lat;
             //var directionsAPI = 'https://api.tiles.mapbox.com/v4/directions/mapbox.walking/'+startEnd+'.json?access_token='+L.mapbox.accessToken;
-            var directionsAPI = 'https://api.mapbox.com/directions/v5/mapbox/walking/'+startEnd+'?steps=true&geometries=geojson&access_token='+L.mapbox.accessToken;
+            var directionsAPI = 'https://api.mapbox.com/directions/v5/mapbox/'+currentTransportMode+'/'+startEnd+'?steps=true&geometries=geojson&access_token='+L.mapbox.accessToken;
             // query for directions and draw the path
             $.get(directionsAPI, function(data){
+                console.log('Transport mode:', currentTransportMode);
+                console.log('API Response:', data);
+                
+                if (!data.routes || data.routes.length === 0) {
+                    alert('No route found for ' + currentTransportMode + ' mode. Try a different transportation mode.');
+                    return;
+                }
+                
                 var coords= data.routes[0].geometry.coordinates;
                 coords.unshift([position.lng, position.lat]);
                 coords.push([e.latlng.lng, e.latlng.lat]);
